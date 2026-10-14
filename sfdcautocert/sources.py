@@ -71,17 +71,27 @@ def _chain_der(sslsock: ssl.SSLSocket, verified: bool) -> list[bytes]:
             for c in getter() or []]
 
 
-def _public_ip(host: str, port: int) -> str:
+def _public_ips(host: str, port: int) -> list[str]:
     """Resolve once and refuse non-public addresses (hosted mode must not probe internal networks).
-    Connecting to the returned IP also closes the DNS-rebinding window. Set SFDCAUTOCERT_ALLOW_PRIVATE=1 to disable."""
-    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    if os.environ.get("SFDCAUTOCERT_ALLOW_PRIVATE") == "1":
-        return infos[0][4][0]
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            raise PermissionError(f"{host} resolves to a non-public address ({ip}); not scanned")
-    return infos[0][4][0]
+    Connecting to the returned IPs (not the name) also closes the DNS-rebinding window.
+    Set SFDCAUTOCERT_ALLOW_PRIVATE=1 to disable the check."""
+    ips = list(dict.fromkeys(i[4][0] for i in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)))
+    if os.environ.get("SFDCAUTOCERT_ALLOW_PRIVATE") != "1":
+        for ip in ips:
+            if not ipaddress.ip_address(ip).is_global:
+                raise PermissionError(f"{host} resolves to a non-public address ({ip}); not scanned")
+    return ips
+
+
+def _connect(ips: list[str], port: int, timeout: float) -> socket.socket:
+    """create_connection semantics over pre-resolved addresses: first one that answers wins."""
+    err: Optional[Exception] = None
+    for ip in ips:
+        try:
+            return socket.create_connection((ip, port), timeout=timeout)
+        except OSError as e:
+            err = e
+    raise err or OSError("no address to connect to")
 
 
 def scan_endpoint(host: str, port: int = 443, timeout: float = 8.0) -> CertRecord:
@@ -96,13 +106,13 @@ def scan_endpoint(host: str, port: int = 443, timeout: float = 8.0) -> CertRecor
                           findings=[Finding(code, sev, str(e) if code == "NOT_SCANNED" else f"TLS handshake failed: {e}")])
 
     try:
-        ip = _public_ip(host, port)
+        ips = _public_ips(host, port)
     except (OSError, PermissionError) as e:
         return fail(e)
 
     try:
         ctx = ssl.create_default_context(cafile=certifi.where())  # Mozilla root set
-        with socket.create_connection((ip, port), timeout=timeout) as s, ctx.wrap_socket(s, server_hostname=host) as ss:
+        with _connect(ips, port, timeout) as s, ctx.wrap_socket(s, server_hostname=host) as ss:
             verified = True
             chain = _chain_der(ss, True) or [ss.getpeercert(binary_form=True)]
             tls_version, cipher = ss.version(), ss.cipher()[0]
@@ -116,7 +126,7 @@ def scan_endpoint(host: str, port: int = 443, timeout: float = 8.0) -> CertRecor
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
-            with socket.create_connection((ip, port), timeout=timeout) as s, ctx.wrap_socket(s, server_hostname=host) as ss:
+            with _connect(ips, port, timeout) as s, ctx.wrap_socket(s, server_hostname=host) as ss:
                 chain = _chain_der(ss, False) or [ss.getpeercert(binary_form=True)]
                 tls_version, cipher = ss.version(), ss.cipher()[0]
         except (OSError, ssl.SSLError) as e:

@@ -81,8 +81,15 @@ def main(argv: list[str] | None = None) -> int:
                                 api_version=args.api_version, with_endpoints=not args.no_endpoints)
         inv.refresh_async()
         app = FastAPI(title="SFDCAutoCert")
-        app.include_router(create_router(dev_inventory=inv, api_version=args.api_version))
-        print(f"Dashboard: http://{args.host}:{args.port}  (Ctrl+C to stop)")
+        app.include_router(create_router(base="/cert-manager", dev_inventory=inv, api_version=args.api_version),
+                           prefix="/cert-manager")  # same path as in production
+
+        @app.get("/", include_in_schema=False)
+        def _root():
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse("/cert-manager")
+
+        print(f"Dashboard: http://{args.host}:{args.port}/cert-manager  (Ctrl+C to stop)")
         uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
         return 0
     if args.cmd == "salesforce":

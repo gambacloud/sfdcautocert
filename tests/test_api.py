@@ -73,6 +73,25 @@ class ApiTests(unittest.TestCase):
 
 
 class SsrfTests(unittest.TestCase):
+    def test_connect_falls_back_to_next_address(self):
+        import socket
+        import threading
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        threading.Thread(target=lambda: srv.accept(), daemon=True).start()
+        # first address is dead (TEST-NET-1 would hang; use an unbound loopback port instead)
+        dead = socket.socket()
+        dead.bind(("127.0.0.2", 0))
+        dead_port = dead.getsockname()[1]
+        dead.close()
+        s = sources._connect(["127.0.0.1"], port, 2.0)
+        s.close()
+        with self.assertRaises(OSError):
+            sources._connect(["127.0.0.2"], dead_port, 1.0)
+        srv.close()
+
     def test_private_addresses_not_scanned(self):
         r = sources.scan_endpoint("127.0.0.1", 443)
         self.assertTrue(any(f.code == "NOT_SCANNED" for f in r.findings))
