@@ -43,6 +43,8 @@ def classify(rec: CertRecord) -> tuple[str, str]:
     d = rec.days_left
     if used and d is not None and d <= 20:
         return "ACTION", f"in use and {'expired' if d < 0 else f'expires in {d} days'}"
+    if not used and not rec.extra.get("apex_scanned", True):
+        return "WATCH", "no references in configuration metadata - Apex was not scanned; run an Apex scan before removing"
     if not used and (d is not None and d < 0):
         return "CLEANUP", "expired and no references found in scanned metadata"
     if not used:

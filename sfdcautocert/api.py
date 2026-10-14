@@ -26,6 +26,7 @@ from fastapi import APIRouter, Cookie, Header, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from . import usage
 from .service import Inventory
 from .sf.auth import Session
 
@@ -96,6 +97,10 @@ class Sessions:
     def delete(self, sid: Optional[str]) -> None:
         with self._lock:
             self._d.pop(sid or "", None)
+
+
+class RefreshBody(BaseModel):
+    scope: Optional[str] = None
 
 
 class SessionBody(BaseModel):
@@ -177,12 +182,15 @@ def create_router(base: str = "", client_id: Optional[str] = None, dev_inventory
         return entry_or_401(cm_sid).inventory.snapshot()
 
     @router.post("/api/refresh", status_code=202)
-    def refresh(response: Response, cm_sid: Optional[str] = Cookie(None),
+    def refresh(response: Response, body: Optional[RefreshBody] = None, cm_sid: Optional[str] = Cookie(None),
                 x_requested_with: Optional[str] = Header(None)):
         need_header(x_requested_with)
         no_store(response)
-        entry_or_401(cm_sid).inventory.refresh_async()
-        return {"started": True}
+        scope = body.scope if body else None
+        if scope is not None and scope not in usage.SCOPES:
+            raise HTTPException(400, f"scope must be one of {', '.join(usage.SCOPES)}")
+        entry_or_401(cm_sid).inventory.refresh_async(scope)
+        return {"started": True, "scope": scope}
 
     @router.post("/api/logout")
     def logout(response: Response, cm_sid: Optional[str] = Cookie(None),

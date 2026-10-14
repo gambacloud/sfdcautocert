@@ -8,6 +8,7 @@ Three evidence types, strongest first:
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
 
@@ -25,26 +26,53 @@ TYPES = {
     "ApexClass": 50,
     "ApexTrigger": 50,
     "Flow": 60,                 # HTTP callout / external service actions
+    "Settings": 40,             # org-wide settings (Identity Provider, My Domain, ...)
+    "CustomSite": 40,           # Experience Cloud / Sites
+    "Network": 40,              # Experience Cloud networks
 }
+
+# Scan scopes. standard = configuration only (default); apex = + relevant Apex only; all = + sites/networks.
+# Settings is cheap and holds the Identity Provider certificate, so it is part of the default scan.
+CONFIG_TYPES = ["SamlSsoConfig", "ConnectedApp", "NamedCredential", "ExternalCredential", "AuthProvider",
+                "ExternalDataSource", "Flow", "Settings"]
+EXTRA_TYPES = ["CustomSite", "Network"]
+# specific components that matter more than their type's default weight
+COMPONENT_WEIGHTS = {("Settings", "IdentityProvider"): 100}
+SCOPES = ("standard", "apex", "all")
+
+
+def metadata_types(scope: str) -> list[str]:
+    """Metadata API types to retrieve for a scope (Apex is scanned separately, see apex.py)."""
+    if scope not in SCOPES:
+        raise ValueError(f"unknown scope {scope!r}")
+    return CONFIG_TYPES + (EXTRA_TYPES if scope == "all" else [])
 # mdapi folder -> metadata type
 FOLDERS = {
     "samlssoconfigs": "SamlSsoConfig", "connectedApps": "ConnectedApp", "namedCredentials": "NamedCredential",
     "externalCredentials": "ExternalCredential", "authproviders": "AuthProvider",
     "dataSources": "ExternalDataSource", "classes": "ApexClass", "triggers": "ApexTrigger",
-    "flows": "Flow",
+    "flows": "Flow", "settings": "Settings", "sites": "CustomSite", "networks": "Network",
 }
 _PEM_RE = re.compile(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", re.S)
 
 
-def collect(client: MetadataClient, types=TYPES) -> tuple[dict[str, bytes], list[str]]:
-    """Retrieve each type separately so one unsupported/empty type doesn't fail the rest."""
+def collect(client: MetadataClient, types=TYPES, workers: int = 4) -> tuple[dict[str, bytes], list[str]]:
+    """Retrieve each type separately (in parallel) so one unsupported/empty type doesn't fail the rest."""
+    types = list(types)
+
+    def one(t: str):
+        try:
+            return t, client.retrieve(t), None
+        except MetadataError as e:
+            return t, {}, str(e)
+
     blobs: dict[str, bytes] = {}
     warnings: list[str] = []
-    for t in types:
-        try:
-            blobs.update(client.retrieve(t))
-        except MetadataError as e:
-            warnings.append(f"{t}: {e}")
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for t, got, err in pool.map(one, types):
+            blobs.update(got)
+            if err:
+                warnings.append(f"{t}: {err}")
     return blobs, warnings
 
 
@@ -84,7 +112,7 @@ def map_usages(records: list[CertRecord], blobs: dict[str, bytes], pems: dict[st
             def add(detail, conf):
                 if (ctype, cname) not in seen:
                     seen.add((ctype, cname))
-                    rec.usages.append(Usage(ctype, cname, detail, conf, TYPES[ctype]))
+                    rec.usages.append(Usage(ctype, cname, detail, conf, COMPONENT_WEIGHTS.get((ctype, cname), TYPES[ctype])))
 
             hit = next((tag for tag, val in fields if val in names), None)
             if hit:

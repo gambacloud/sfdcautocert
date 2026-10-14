@@ -16,6 +16,7 @@ header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:16px;bord
 h1{font-size:18px;margin:0}.sub{color:var(--mut);font-size:12px}.sp{flex:1}
 button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer}
 button:hover{border-color:var(--accent)}button[disabled]{opacity:.5;cursor:default}
+select{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 main{padding:16px;max-width:1200px;margin:0 auto}
 .hidden{display:none!important}
@@ -53,6 +54,11 @@ tr.row{cursor:pointer}tr.row:hover td{background:var(--bg)}
 <header>
   <div><h1>Cert Manager</h1><div class="sub" id="meta"></div></div>
   <div class="sp"></div>
+  <select id="scope" class="hidden" title="What to scan on the next rescan">
+    <option value="standard">Standard (no Apex)</option>
+    <option value="apex">+ Apex (relevant classes only)</option>
+    <option value="all">Everything (Apex, settings, sites)</option>
+  </select>
   <button id="refresh" class="hidden">Rescan org</button>
   <button id="logout" class="hidden">Log out</button>
 </header>
@@ -115,6 +121,7 @@ function show(which) {
   $("login").classList.toggle("hidden", which !== "login");
   $("app").classList.toggle("hidden", which !== "app");
   $("refresh").classList.toggle("hidden", which !== "app");
+  $("scope").classList.toggle("hidden", which !== "app");
   $("logout").classList.toggle("hidden", which !== "app" || state.dev);
 }
 
@@ -186,8 +193,14 @@ function render() {
   $("meta").textContent = (d.org ? d.org + " · " : "") + (d.scanning ? "scanning… (about a minute)" :
     d.scanned_at ? `scanned ${new Date(d.scanned_at).toLocaleString()} (${d.duration_s}s)` : "not scanned yet");
   $("refresh").disabled = d.scanning;
+  $("scope").disabled = d.scanning;
+  if (!state.scopeTouched) $("scope").value = d.scope || "standard";
 
   const notes = [];
+  if (d.scope === "standard" && d.scanned_at) notes.push(h("div", {class: "note"},
+    "Standard scan: Apex code was not read, so a certificate that looks unused may still be referenced from Apex. ",
+    "Choose \u201c+ Apex\u201d and rescan to check."));
+  for (const n of d.notes || []) notes.push(h("div", {class: "note"}, n));
   if (d.warnings && d.warnings.length) notes.push(h("div", {class: "note"},
     "Some metadata could not be read (usually missing 'Modify Metadata' permission), so usage mapping may be incomplete: ",
     d.warnings.join("; ")));
@@ -247,7 +260,12 @@ document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () =>
 $("q").addEventListener("input", e => { state.q = e.target.value; render(); });
 $("env").addEventListener("change", e => $("customWrap").classList.toggle("hidden", e.target.value !== "custom"));
 $("loginBtn").addEventListener("click", startLogin);
-$("refresh").addEventListener("click", async () => { await fetch(BASE + "/api/refresh", {method: "POST", headers: HDR}); setTimeout(load, 300); });
+$("scope").addEventListener("change", () => { state.scopeTouched = true; });
+$("refresh").addEventListener("click", async () => {
+  await fetch(BASE + "/api/refresh", {method: "POST", headers: HDR, body: JSON.stringify({scope: $("scope").value})});
+  state.scopeTouched = false;
+  setTimeout(load, 300);
+});
 $("logout").addEventListener("click", async () => { await fetch(BASE + "/api/logout", {method: "POST", headers: HDR}); location.reload(); });
 boot();
 </script>

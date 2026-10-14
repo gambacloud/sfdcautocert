@@ -18,7 +18,7 @@ def _session_factory(args):
 
 
 def _salesforce(args) -> list:
-    return service.scan_org(_session_factory(args)(), args.api_version, not args.no_usage,
+    return service.scan_org(_session_factory(args)(), args.api_version, args.scope, not args.no_usage,
                             not (args.no_usage or args.no_endpoints))
 
 
@@ -31,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("salesforce", help="scan certificates + usages in an org (server-side Metadata API calls)")
     s.add_argument("org", nargs="?", help="sf CLI org alias/username (dev auth); omit when using --jwt-*")
     s.add_argument("--api-version", default="62.0")
+    s.add_argument("--scope", choices=("standard", "apex", "all"), default="standard",
+                   help="standard: config metadata only; apex: + relevant Apex; all: + settings/sites/networks")
     s.add_argument("--no-usage", action="store_true", help="skip usage mapping (and endpoint discovery)")
     s.add_argument("--no-endpoints", action="store_true", help="skip discovery/TLS scan of endpoints referenced by the org")
     s.add_argument("--jwt-client-id", default=os.getenv("SF_CLIENT_ID"), help="Connected App consumer key (JWT bearer)")
@@ -45,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--host", default="127.0.0.1")
     v.add_argument("--port", type=int, default=8765)
     v.add_argument("--no-endpoints", action="store_true")
+    v.add_argument("--scope", choices=("standard", "apex", "all"), default="standard")
     v.add_argument("--config", type=Path, help="JSON file: client_id, username, key_file[, login_url]")
     v.add_argument("--jwt-client-id", default=os.getenv("SF_CLIENT_ID"))
     v.add_argument("--jwt-username", default=os.getenv("SF_USERNAME"))
@@ -78,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
 
         from .api import create_router
         inv = service.Inventory(_session_factory(args), org_label=args.jwt_username or args.org,
-                                api_version=args.api_version, with_endpoints=not args.no_endpoints)
+                                api_version=args.api_version, scope=args.scope, with_endpoints=not args.no_endpoints)
         inv.refresh_async()
         app = FastAPI(title="SFDCAutoCert")
         app.include_router(create_router(base="/cert-manager", dev_inventory=inv, api_version=args.api_version),

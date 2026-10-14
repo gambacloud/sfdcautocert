@@ -7,7 +7,7 @@ so no CORS configuration is needed on the Connected App; a future UI should talk
 
 ## Phase 1: inventory & display
     python scripts/setup_connected_app.py <sf-alias> <username>        # once: External Client App + JWT key in .secrets/
-    python -m sfdcautocert serve --config .secrets/org.json            # dashboard on http://127.0.0.1:8765
+    python -m sfdcautocert serve --config .secrets/org.json            # dashboard on http://127.0.0.1:8765/cert-manager
 
 `.secrets/org.json`: `{"client_id": "...", "username": "...", "key_file": "jwt_key.pem"}` (key path is relative to the file; git-ignored).
 For dev you can also use `serve <sf-alias>` (reuses the sf CLI login).
@@ -16,13 +16,26 @@ The browser only talks to this backend (`/api/inventory`, `POST /api/refresh`); 
 so no CORS setup is needed on the app. The dashboard shows relevance tiles (Action / Watch / Cleanup / Not affected), certificates
 and discovered endpoints, with per-item details (subject, EKU, usages, findings, trust). Scans run in the background (~50s).
 
+## Scan scopes
+| Scope | Reads | Typical time |
+|---|---|---|
+| **standard** (default) | certificates, SAML SSO, Connected Apps, Named/External Credentials, Auth Providers, External Data Sources, Flows, org Settings (Identity Provider), Remote Site / CSP | ~30s |
+| **apex** | + Apex classes/triggers that mention certificates, callouts or URLs | ~30s |
+| **all** | + Sites and Experience Cloud networks | ~30s |
+
+Apex `Body` cannot be filtered in SOQL/SOSL, so the Apex scan lists classes cheaply, pulls bodies in batches of 25 through the Tooling API
+and keeps only the relevant ones (managed-package classes are skipped); memory stays flat even for large orgs.
+Without an Apex scan a certificate with no references is shown as WATCH (not CLEANUP), because Apex may still use it.
+CLI: `salesforce --scope standard|apex|all`; the dashboard has a scope selector next to *Rescan org*.
+
 ## Layout (where phase 2 plugs in)
     sf/            Salesforce clients: auth (JWT bearer / sf CLI), Metadata API retrieve+deploy, Tooling API
     sources.py     certificates from files / Metadata blobs, TLS endpoint scan
     usage.py       certificate -> component mapping       discovery.py   endpoints referenced by the org
     analyze.py     findings per certificate               relevance.py   triage level + reason
     service.py     scan_org(), Inventory (cached snapshot, refresh)
-    web.py + static/index.html   JSON API + dashboard
+    api.py + static/index.html   FastAPI router (login session, scan jobs, inventory) + dashboard
+    apex.py        bounded Apex scan
     certstore.py rotate.py acme.py issue.py   phase 2 actions (CSR flow, rotation, issuance) - already usable, not wired to the UI
 
 ## Run
@@ -89,3 +102,10 @@ Live check: `python scripts/csr_e2e.py <consumer-key> <username>`.
   (the ACME client in `acme.py` is for server certs on your own hosts / ACME-capable private CAs).
 - Public CAs no longer issue `clientAuth`, so mTLS client certs need a private PKI anyway.
 - Rotation creates a new cert; repointing consumers (Named Credential, SAML config, ...) and retiring the old one is the next step.
+
+## Hosting inside salesforce-debugtool (Heroku)
+`app.py` includes `create_router(base="/cert-manager")` (guarded import). The page is the OAuth redirect target, so register
+`https://<app>.herokuapp.com/cert-manager` as a Callback URL on the Connected App named by `SF_CLIENT_ID` (scope `api`).
+The user's token is exchanged for an in-memory, HttpOnly session; every Salesforce call is made server-side.
+Hosted-mode guards: Salesforce-only instance URLs, no TLS probing of private addresses, `X-Requested-With` on POSTs.
+Install from the private repo with a read-only token: `git+https://${SFDCAUTOCERT_GH_TOKEN}@github.com/gambacloud/sfdcautocert.git@<sha>`.
