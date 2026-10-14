@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Cert Manager</title>
+<style>
+:root{--bg:#f7f7f8;--panel:#fff;--fg:#1b1d21;--mut:#6b7280;--line:#e5e7eb;
+--action:#c62828;--watch:#b7791f;--cleanup:#6b7280;--ok:#2e7d32;--accent:#2457d6;--chip:#eef0f3}
+@media(prefers-color-scheme:dark){:root{--bg:#111214;--panel:#1a1c1f;--fg:#ececee;--mut:#9aa0a8;--line:#2b2e33;
+--action:#ef5350;--watch:#f0b429;--cleanup:#9aa0a8;--ok:#66bb6a;--accent:#7aa2ff;--chip:#24272c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:16px;border-bottom:1px solid var(--line);background:var(--panel)}
+h1{font-size:18px;margin:0}.sub{color:var(--mut);font-size:12px}.sp{flex:1}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer}
+button:hover{border-color:var(--accent)}button[disabled]{opacity:.5;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+main{padding:16px;max-width:1200px;margin:0 auto}
+.hidden{display:none!important}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px;max-width:460px;margin:48px auto}
+.card h2{margin:0 0 6px;font-size:18px}.card p{color:var(--mut);margin:0 0 16px}
+.card label{display:block;margin:10px 0 4px;color:var(--mut);font-size:12px}
+.card select,.card input{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+.card button{margin-top:16px;width:100%}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;cursor:pointer}
+.tile b{font-size:24px;display:block}.tile span{color:var(--mut);font-size:12px}
+.tile.sel{outline:2px solid var(--accent)}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.tab{padding:6px 12px;border-radius:6px;cursor:pointer;background:var(--chip)}.tab.sel{background:var(--accent);color:#fff}
+input[type=search]{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);min-width:200px}
+.wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:500;font-size:12px;white-space:nowrap}
+tr.row{cursor:pointer}tr.row:hover td{background:var(--bg)}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap}
+.ACTION{background:var(--action)}.WATCH{background:var(--watch)}.CLEANUP{background:var(--cleanup)}.NOT_AFFECTED{background:var(--ok)}
+.days{font-variant-numeric:tabular-nums;white-space:nowrap}.neg{color:var(--action);font-weight:600}.warn{color:var(--watch);font-weight:600}
+.mut{color:var(--mut)}.sm{font-size:12px}
+.detail td{background:var(--bg)}
+.grid{display:grid;grid-template-columns:130px 1fr;gap:4px 12px;margin:0}
+.grid dt{color:var(--mut)}.grid dd{margin:0;word-break:break-word}
+.tag{display:inline-block;background:var(--chip);padding:1px 7px;border-radius:4px;font-size:12px;margin:0 4px 4px 0}
+.empty,.err{padding:24px;text-align:center;color:var(--mut)}.err{color:var(--action)}
+.note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--watch);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--mut)}
+@media(max-width:640px){.hide-s{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Cert Manager</h1><div class="sub" id="meta"></div></div>
+  <div class="sp"></div>
+  <button id="refresh" class="hidden">Rescan org</button>
+  <button id="logout" class="hidden">Log out</button>
+</header>
+<main>
+  <section id="login" class="card hidden">
+    <h2>Connect a Salesforce org</h2>
+    <p>Read-only scan of certificates, where they are used, and the endpoints the org depends on.
+       The token is kept server-side for this session only and is never stored.</p>
+    <label for="env">Environment</label>
+    <select id="env">
+      <option value="https://login.salesforce.com">Production / Developer Edition</option>
+      <option value="https://test.salesforce.com">Sandbox</option>
+      <option value="custom">My Domain URL…</option>
+    </select>
+    <div id="customWrap" class="hidden">
+      <label for="custom">My Domain URL</label>
+      <input id="custom" placeholder="https://yourcompany.my.salesforce.com">
+    </div>
+    <button id="loginBtn" class="primary">Log in with Salesforce</button>
+    <div id="loginMsg" class="sm mut" style="margin-top:12px"></div>
+  </section>
+
+  <section id="app" class="hidden">
+    <div id="notes"></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="bar">
+      <span class="tab sel" data-tab="certs">Certificates</span>
+      <span class="tab" data-tab="eps">Endpoints</span>
+      <span class="sp"></span>
+      <input type="search" id="q" placeholder="Filter by name, issuer, component…">
+    </div>
+    <div class="wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+    <div id="msg"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const BASE = "__BASE__";
+const $ = id => document.getElementById(id);
+const state = {data: null, tab: "certs", rel: null, q: "", open: new Set(), clientId: ""};
+const REL_ORDER = ["ACTION", "WATCH", "CLEANUP", "NOT_AFFECTED"];
+const REL_LABEL = {ACTION: "Action", WATCH: "Watch", CLEANUP: "Cleanup", NOT_AFFECTED: "Not affected"};
+const HDR = {"Content-Type": "application/json", "X-Requested-With": "cert-manager"};
+
+// all untrusted text (certificate subjects, org metadata) goes through textContent, never innerHTML
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") el.className = v; else if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else el.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) if (k != null) el.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return el;
+}
+const fmtDate = s => s ? s.slice(0, 10) : "-";
+function daysCell(d) {
+  if (d == null) return h("span", {class: "mut"}, "-");
+  return h("span", {class: "days " + (d < 0 ? "neg" : d <= 20 ? "warn" : "")}, d < 0 ? `expired ${-d}d ago` : `${d} d`);
+}
+function show(which) {
+  $("login").classList.toggle("hidden", which !== "login");
+  $("app").classList.toggle("hidden", which !== "app");
+  $("refresh").classList.toggle("hidden", which !== "app");
+  $("logout").classList.toggle("hidden", which !== "app" || state.dev);
+}
+
+// ---- login (OAuth user-agent flow handled by the page, token handed straight to our backend)
+function startLogin() {
+  if (!state.clientId) { $("loginMsg").textContent = "Server has no SF_CLIENT_ID configured."; return; }
+  let host = $("env").value;
+  if (host === "custom") {
+    try {
+      const u = new URL($("custom").value.trim());
+      if (u.protocol !== "https:") throw new Error("https required");
+      host = u.origin;
+    } catch (e) { $("loginMsg").textContent = "Enter a valid https My Domain URL."; return; }
+  }
+  const nonce = crypto.getRandomValues(new Uint32Array(4)).join("-");
+  sessionStorage.setItem("cm_state", nonce);
+  const redirect = location.origin + (BASE || "/");
+  location.href = `${host}/services/oauth2/authorize?response_type=token&client_id=${encodeURIComponent(state.clientId)}` +
+    `&redirect_uri=${encodeURIComponent(redirect)}&scope=${encodeURIComponent("api")}&state=${encodeURIComponent(nonce)}`;
+}
+
+async function handleRedirect() {
+  if (!location.hash.includes("access_token=")) return false;
+  const p = new URLSearchParams(location.hash.slice(1));
+  history.replaceState(null, "", location.pathname);           // token must not stay in the URL / history
+  if (!p.get("state") || p.get("state") !== sessionStorage.getItem("cm_state")) {
+    $("loginMsg").textContent = "Login state mismatch - please try again."; return true;
+  }
+  sessionStorage.removeItem("cm_state");
+  const r = await fetch(BASE + "/api/session", {method: "POST", headers: HDR,
+    body: JSON.stringify({access_token: p.get("access_token"), instance_url: p.get("instance_url")})});
+  if (!r.ok) { $("loginMsg").textContent = "Login failed: " + ((await r.json().catch(() => ({}))).detail || r.status); }
+  return true;
+}
+
+async function boot() {
+  const cfg = await (await fetch(BASE + "/api/config")).json();
+  state.clientId = cfg.clientId; state.dev = cfg.dev;
+  await handleRedirect();
+  const me = await (await fetch(BASE + "/api/me")).json();
+  if (!me.authenticated) { show("login"); $("meta").textContent = "not connected"; return; }
+  state.me = me; show("app"); load();
+}
+
+async function load() {
+  try {
+    const r = await fetch(BASE + "/api/inventory");
+    if (r.status === 401) { show("login"); return; }
+    state.data = await r.json();
+  } catch (e) {
+    $("msg").replaceChildren(h("div", {class: "err"}, "Backend unreachable: " + e));
+    return;
+  }
+  render();
+  if (state.data.scanning) setTimeout(load, 1500);
+}
+
+function items() {
+  const isEp = it => it.source === "endpoint";
+  const q = state.q.toLowerCase();
+  return state.data.items.filter(it => (state.tab === "eps") === isEp(it))
+    .filter(it => !state.rel || it.relevance === state.rel)
+    .filter(it => !q || JSON.stringify([it.name, it.location, it.issuer, it.subject, it.usages, it.extra.referenced_by]).toLowerCase().includes(q))
+    .sort((a, b) => REL_ORDER.indexOf(a.relevance) - REL_ORDER.indexOf(b.relevance) || b.risk_score - a.risk_score);
+}
+
+function render() {
+  const d = state.data, s = d.summary;
+  $("meta").textContent = (d.org ? d.org + " · " : "") + (d.scanning ? "scanning… (about a minute)" :
+    d.scanned_at ? `scanned ${new Date(d.scanned_at).toLocaleString()} (${d.duration_s}s)` : "not scanned yet");
+  $("refresh").disabled = d.scanning;
+
+  const notes = [];
+  if (d.warnings && d.warnings.length) notes.push(h("div", {class: "note"},
+    "Some metadata could not be read (usually missing 'Modify Metadata' permission), so usage mapping may be incomplete: ",
+    d.warnings.join("; ")));
+  $("notes").replaceChildren(...notes);
+
+  const tile = (label, n, rel) => h("div", {class: "tile" + (state.rel === rel && rel ? " sel" : ""),
+    onclick: () => { state.rel = state.rel === rel ? null : rel; render(); }}, h("b", {}, n), h("span", {}, label));
+  $("tiles").replaceChildren(
+    ...REL_ORDER.map(r => tile(REL_LABEL[r], s.by_relevance[r] || 0, r)),
+    tile("Expiring ≤ 20 days", s.expiring_20d, null), tile("Dual-use (public CA)", s.dual_use, null));
+
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("sel", t.dataset.tab === state.tab));
+  const rows = items();
+  const eps = state.tab === "eps";
+  $("thead").replaceChildren(h("tr", {}, ...(eps
+    ? ["Relevance", "Endpoint", "Root / chain", "Referenced by", "Days left"]
+    : ["Relevance", "Certificate", "Issuer", "Used by", "Days left", "Risk"]).map(c => h("th", {}, c))));
+
+  const body = [];
+  for (const it of rows) {
+    const key = it.source + "|" + it.name + "|" + it.location;
+    body.push(h("tr", {class: "row", onclick: () => { state.open.has(key) ? state.open.delete(key) : state.open.add(key); render(); }},
+      h("td", {}, h("span", {class: "pill " + it.relevance}, REL_LABEL[it.relevance] || it.relevance || "-")),
+      h("td", {}, h("div", {}, it.name), h("div", {class: "mut sm"}, it.relevance_reason)),
+      h("td", {class: "sm"}, eps ? (it.extra.root || it.extra.scheme || "-") : (it.self_signed ? "self-signed" : (it.issuer || "-").slice(0, 60))),
+      h("td", {class: "sm"}, eps ? (it.extra.referenced_by || []).slice(0, 3).join(", ") : (it.usages.map(u => `${u.kind}:${u.component}`).slice(0, 3).join(", ") || "-")),
+      h("td", {}, daysCell(it.days_left)),
+      eps ? null : h("td", {}, it.risk_score)));
+    if (state.open.has(key)) body.push(detailRow(it, eps ? 5 : 6));
+  }
+  $("tbody").replaceChildren(...body);
+  $("msg").replaceChildren(d.error ? h("div", {class: "err"}, "Last scan failed: " + d.error)
+    : !rows.length ? h("div", {class: "empty"}, d.scanned_at ? "Nothing matches the current filter." : "Waiting for the first scan…") : "");
+}
+
+function detailRow(it, span) {
+  const dl = h("dl", {class: "grid"});
+  const add = (k, v) => { if (v != null && v !== "" && !(Array.isArray(v) && !v.length)) dl.append(h("dt", {}, k), h("dd", {}, v)); };
+  add("Location", it.location);
+  add("Subject", it.subject);
+  add("Issuer", it.issuer);
+  add("Valid", it.not_before ? `${fmtDate(it.not_before)} → ${fmtDate(it.not_after)} (${it.validity_days} days)` : null);
+  add("Key", it.key_type ? `${it.key_type} ${it.key_size || ""} · ${it.sig_alg || ""}` : null);
+  add("EKU", it.key_type ? (it.eku.length ? it.eku.map(e => h("span", {class: "tag"}, e)) : "none (unrestricted)") : null);
+  add("Salesforce flags", ["system_managed", "ca_signed", "key_exportable"].filter(k => it.extra[k]).join(", "));
+  add("Trust", it.extra.mozilla_trusted != null ? (it.extra.mozilla_trusted ? "valid against Mozilla root set" : "NOT valid against Mozilla root set") : null);
+  add("TLS", it.extra.tls_version ? `${it.extra.tls_version} · ${it.extra.cipher}` : null);
+  add("Chain", it.extra.chain);
+  if (it.usages.length) add("Used by", h("div", {}, it.usages.map(u => h("div", {}, `${u.kind}: `, h("b", {}, u.component),
+    h("span", {class: "mut"}, ` — ${u.detail} (${u.confidence})`)))));
+  add("Referenced by", it.extra.referenced_by);
+  if (it.findings.length) add("Findings", h("div", {}, it.findings.map(f => h("div", {}, h("b", {}, f.code), ` [${f.severity}] `, h("span", {class: "mut"}, f.message)))));
+  return h("tr", {class: "detail"}, h("td", {colspan: span}, dl));
+}
+
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => { state.tab = t.dataset.tab; render(); }));
+$("q").addEventListener("input", e => { state.q = e.target.value; render(); });
+$("env").addEventListener("change", e => $("customWrap").classList.toggle("hidden", e.target.value !== "custom"));
+$("loginBtn").addEventListener("click", startLogin);
+$("refresh").addEventListener("click", async () => { await fetch(BASE + "/api/refresh", {method: "POST", headers: HDR}); setTimeout(load, 300); });
+$("logout").addEventListener("click", async () => { await fetch(BASE + "/api/logout", {method: "POST", headers: HDR}); location.reload(); });
+boot();
+</script>
+</body>
+</html>

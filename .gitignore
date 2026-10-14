@@ -1,0 +1,6 @@
+.secrets/
+out/
+__pycache__/
+*.pyc
+.scratch*
+*.egg-info/
