@@ -109,3 +109,14 @@ Live check: `python scripts/csr_e2e.py <consumer-key> <username>`.
 The user's token is exchanged for an in-memory, HttpOnly session; every Salesforce call is made server-side.
 Hosted-mode guards: Salesforce-only instance URLs, no TLS probing of private addresses, `X-Requested-With` on POSTs.
 Install from the private repo with a read-only token: `git+https://${SFDCAUTOCERT_GH_TOKEN}@github.com/gambacloud/sfdcautocert.git@<sha>`.
+
+## Hosted-mode limits (limits.py)
+The service shares a small dyno with other tools, so scans are bounded (override with `CERT_MANAGER_*` env vars):
+2 concurrent scans process-wide ("busy, try again" otherwise), 30s cooldown per session (HTTP 429 + `Retry-After`),
+40 TLS probes per scan (configuration references first), 40 MB per Metadata API response, 60 MB unzipped per type,
+100 MB per scan, 5000 Apex bodies pulled and 20 MB retained. Anything skipped is reported in the page, never silently dropped.
+
+## Endpoint findings
+`HOSTNAME_MISMATCH` (chain trusted, name not covered - usually a stale reference), `EXPIRED`, `NOT_YET_VALID`,
+`UNTRUSTED_CHAIN` (not valid against the Mozilla set; Salesforce's own trust store may differ), `UNREACHABLE`, `NOT_SCANNED` (private address).
+Runs on Python 3.10+; the peer chain uses the private `SSLObject.get_verified_chain` before 3.13 (Heroku runs 3.11).

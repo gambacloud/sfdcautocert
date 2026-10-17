@@ -25,8 +25,15 @@ def classify(rec: CertRecord) -> tuple[str, str]:
             return "NOT_AFFECTED", "internal/non-public address - not scanned from this service"
         if rec.error:
             return "ACTION", "TLS handshake failed - integration may already be broken"
+        if "HOSTNAME_MISMATCH" in codes:
+            return "ACTION", "certificate does not match the hostname - callouts fail; fix or remove the stale reference"
+        if "EXPIRED" in codes:
+            return "ACTION", "the endpoint's certificate has expired - callouts fail"
+        if "NOT_YET_VALID" in codes:
+            return "ACTION", "the endpoint's certificate is not valid yet"
         if "UNTRUSTED_CHAIN" in codes:
-            return "ACTION", "chain not valid against the Mozilla root set (needs custom CA in trust store or a re-issue)"
+            return "ACTION", ("chain not valid against the Mozilla root set - check whether a custom CA is uploaded "
+                              "to Salesforce, otherwise callouts fail")
         if rec.extra.get("scheme") == "http":
             return "WATCH", "plain HTTP endpoint (no TLS)"
         return "NOT_AFFECTED", f"publicly trusted chain, root: {rec.extra.get('root', '?')}"

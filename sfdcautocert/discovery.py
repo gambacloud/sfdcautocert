@@ -7,7 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
-from . import sources
+from typing import Callable
+
+from . import limits, sources
 from .model import CertRecord, Finding
 
 ENDPOINT_TYPES = ["RemoteSiteSetting", "CspTrustedSite"]  # in addition to usage.TYPES
@@ -56,9 +58,19 @@ def extract_endpoints(blobs: dict[str, bytes]) -> dict[tuple[str, str, int], set
     return found
 
 
-def scan_discovered(blobs: dict[str, bytes], timeout: float = 8.0, workers: int = 12) -> list[CertRecord]:
+def scan_discovered(blobs: dict[str, bytes], timeout: float = 8.0, workers: int = 12,
+                    max_hosts: int = limits.MAX_ENDPOINT_SCANS, note: Callable[[str], None] = lambda m: None) -> list[CertRecord]:
     found = sorted(extract_endpoints(blobs).items())
-    tls_hosts = sorted({(host, port) for (scheme, host, port), _ in found if scheme == "https"})
+    refs_of = {}
+    for (scheme, host, port), refs in found:
+        if scheme == "https":
+            refs_of.setdefault((host, port), set()).update(refs)
+    # configuration references first (they are what Salesforce actually calls), then the most referenced
+    ranked = sorted(refs_of, key=lambda hp: (all(r.startswith(("Apex:", "Flow:")) for r in refs_of[hp]), -len(refs_of[hp]), hp))
+    tls_hosts = sorted(ranked[:max_hosts])
+    if len(ranked) > max_hosts:
+        note(f"Endpoint scan limited to {max_hosts} of {len(ranked)} hosts referenced by the org")
+        found = [f for f in found if f[0][0] != "https" or (f[0][1], f[0][2]) in set(tls_hosts)]
     with ThreadPoolExecutor(max_workers=workers) as pool:  # unreachable hosts only cost one timeout, in parallel
         scanned = dict(zip(tls_hosts, pool.map(lambda hp: sources.scan_endpoint(hp[0], hp[1], timeout), tls_hosts)))
 

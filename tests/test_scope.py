@@ -3,7 +3,7 @@ import unittest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from sfdcautocert import api, apex, relevance, service, usage
+from sfdcautocert import api, apex, limits, relevance, service, usage
 from sfdcautocert.model import CertRecord
 from sfdcautocert.sf import tooling
 
@@ -68,6 +68,8 @@ class ScopeTests(unittest.TestCase):
         seen = []
         orig = service.scan_org
         service.scan_org = lambda *a, **k: seen.append(k.get("scope")) or []
+        cooldown = limits.SCAN_COOLDOWN_S
+        limits.SCAN_COOLDOWN_S = 0
         try:
             app = FastAPI()
             app.include_router(api.create_router(base="/cm", userinfo=lambda u, t: {"email": "a@b.c"}), prefix="/cm")
@@ -83,6 +85,7 @@ class ScopeTests(unittest.TestCase):
             self.assertIn("apex", seen)
         finally:
             service.scan_org = orig
+            limits.SCAN_COOLDOWN_S = cooldown
 
 
 if __name__ == "__main__":

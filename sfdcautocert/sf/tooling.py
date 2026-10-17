@@ -5,6 +5,7 @@ import json
 import urllib.parse
 import urllib.request
 
+from .. import limits
 from .auth import Session
 
 
@@ -14,7 +15,10 @@ def query(session: Session, soql: str, api_version: str = "62.0") -> list[dict]:
     while url:
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {session.access_token}"})
         with urllib.request.urlopen(req, timeout=60) as r:
-            page = json.loads(r.read())
+            raw = r.read(limits.MAX_JSON_RESPONSE + 1)
+        if len(raw) > limits.MAX_JSON_RESPONSE:
+            raise ValueError(f"Tooling API page larger than {limits.MAX_JSON_RESPONSE // (1024 * 1024)} MB")
+        page = json.loads(raw)
         records += page.get("records", [])
         nxt = page.get("nextRecordsUrl")
         url = session.instance_url + nxt if nxt else None

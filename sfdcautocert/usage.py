@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
 
+from . import limits
 from .model import CertRecord, Finding, Usage
 from .sf.metadata import MetadataClient, MetadataError
 
@@ -56,7 +57,7 @@ FOLDERS = {
 _PEM_RE = re.compile(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", re.S)
 
 
-def collect(client: MetadataClient, types=TYPES, workers: int = 4) -> tuple[dict[str, bytes], list[str]]:
+def collect(client: MetadataClient, types=TYPES, workers: int = limits.RETRIEVE_WORKERS) -> tuple[dict[str, bytes], list[str]]:
     """Retrieve each type separately (in parallel) so one unsupported/empty type doesn't fail the rest."""
     types = list(types)
 
@@ -68,8 +69,14 @@ def collect(client: MetadataClient, types=TYPES, workers: int = 4) -> tuple[dict
 
     blobs: dict[str, bytes] = {}
     warnings: list[str] = []
+    total = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for t, got, err in pool.map(one, types):
+            size = sum(len(b) for b in got.values())
+            if total + size > limits.MAX_TOTAL_BLOBS:
+                warnings.append(f"{t}: skipped, scan size limit ({limits.MAX_TOTAL_BLOBS // (1024 * 1024)} MB) reached")
+                continue
+            total += size
             blobs.update(got)
             if err:
                 warnings.append(f"{t}: {err}")

@@ -63,12 +63,27 @@ def scan_files(root: Path) -> list[CertRecord]:
 
 # ---------------------------------------------------------------- live TLS endpoints
 
+_ENCODING_DER = getattr(getattr(ssl, "_ssl", None), "ENCODING_DER", 2)
+
+
 def _chain_der(sslsock: ssl.SSLSocket, verified: bool) -> list[bytes]:
-    getter = getattr(sslsock, "get_verified_chain" if verified else "get_unverified_chain", None)
+    """Peer chain as DER. SSLSocket.get_*_chain is public from Python 3.13; on 3.10-3.12 only the private
+    SSLObject methods exist (they return _ssl.Certificate objects)."""
+    name = "get_verified_chain" if verified else "get_unverified_chain"
+    getter = getattr(sslsock, name, None) or getattr(getattr(sslsock, "_sslobj", None), name, None)
     if getter is None:
         return []
-    return [c if isinstance(c, (bytes, bytearray)) else c.public_bytes(serialization.Encoding.DER)
-            for c in getter() or []]
+    try:
+        chain = getter() or []
+    except (ValueError, OSError):
+        return []
+    return [bytes(c) if isinstance(c, (bytes, bytearray)) else c.public_bytes(_ENCODING_DER) for c in chain]
+
+
+# OpenSSL verify codes we report specifically; anything else is an untrusted chain
+_HOSTNAME_CODES = {62, 64}      # hostname / IP address mismatch (the chain itself validated)
+_EXPIRED_CODE = 10
+_NOT_YET_VALID_CODE = 9
 
 
 def _public_ips(host: str, port: int) -> list[str]:
@@ -94,9 +109,10 @@ def _connect(ips: list[str], port: int, timeout: float) -> socket.socket:
     raise err or OSError("no address to connect to")
 
 
-def scan_endpoint(host: str, port: int = 443, timeout: float = 8.0) -> CertRecord:
+def scan_endpoint(host: str, port: int = 443, timeout: float = 8.0, cafile: Optional[str] = None) -> CertRecord:
     target = f"{host}:{port}"
     verify_error: Optional[str] = None
+    verify_code: Optional[int] = None
     verified = False
 
     def fail(e):
@@ -111,13 +127,13 @@ def scan_endpoint(host: str, port: int = 443, timeout: float = 8.0) -> CertRecor
         return fail(e)
 
     try:
-        ctx = ssl.create_default_context(cafile=certifi.where())  # Mozilla root set
+        ctx = ssl.create_default_context(cafile=cafile or certifi.where())  # Mozilla root set
         with _connect(ips, port, timeout) as s, ctx.wrap_socket(s, server_hostname=host) as ss:
             verified = True
             chain = _chain_der(ss, True) or [ss.getpeercert(binary_form=True)]
             tls_version, cipher = ss.version(), ss.cipher()[0]
     except ssl.SSLCertVerificationError as e:
-        verify_error = e.verify_message
+        verify_error, verify_code = e.verify_message, e.verify_code
     except (OSError, ssl.SSLError) as e:
         return fail(e)
 
@@ -137,17 +153,32 @@ def scan_endpoint(host: str, port: int = 443, timeout: float = 8.0) -> CertRecor
     extra = {
         "tls_version": tls_version,
         "cipher": cipher,
-        "mozilla_trusted": verified,
+        # a hostname mismatch is only reported after the chain itself validated
+        "mozilla_trusted": verified or verify_code in _HOSTNAME_CODES,
+        "verify_error": verify_error,
+        "verify_code": verify_code,
         "chain": [c.subject.rfc4514_string() for c in certs],
         "root": (top.subject if top.subject == top.issuer else top.issuer).rfc4514_string(),
     }
     rec = build_record(certs[0], "endpoint", host, target, extra)
     for f in rec.findings:  # third-party server certs: informative, not actionable by the org owner
-        if f.code in ("DUAL_USE", "LONG_LIFETIME"):
+        if f.code in ("DUAL_USE", "LONG_LIFETIME", "EXPIRES_SOON"):
             f.severity = "INFO"
     if not verified:
-        rec.findings.append(Finding("UNTRUSTED_CHAIN", "HIGH",
-                                    f"chain does not validate against the Mozilla root set: {verify_error}"))
+        if verify_code in _HOSTNAME_CODES:
+            rec.findings.append(Finding(
+                "HOSTNAME_MISMATCH", "MEDIUM",
+                f"the certificate is not valid for {host} (the chain itself is trusted) - callouts to this host fail; "
+                "the reference may be stale or point to a retired host"))
+        elif verify_code == _EXPIRED_CODE:
+            pass  # already reported as EXPIRED by the certificate analysis
+        elif verify_code == _NOT_YET_VALID_CODE:
+            rec.findings.append(Finding("NOT_YET_VALID", "MEDIUM", "the certificate is not valid yet"))
+        else:
+            rec.findings.append(Finding(
+                "UNTRUSTED_CHAIN", "HIGH",
+                f"chain does not validate against the Mozilla root set ({verify_error}). Salesforce's own trust store "
+                "may differ - check whether a custom CA is uploaded before acting"))
     return rec
 
 

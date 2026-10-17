@@ -17,7 +17,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from . import apex, discovery, relevance, sources, usage
+from . import apex, discovery, limits, relevance, sources, usage
 from .model import CertRecord
 from .sf import tooling
 from .sf.auth import Session
@@ -52,14 +52,15 @@ def scan_org(session: Session, api_version: str = "62.0", scope: str = "standard
                 apex_blobs, st = apex.scan_apex(session, names, api_version)
                 comp_blobs.update(apex_blobs)
                 note(f"Apex: scanned {st['scanned']} classes/triggers, {st['relevant']} relevant "
-                     f"({st['managed_skipped']} managed-package skipped)")
+                     f"({st['managed_skipped']} managed-package skipped)"
+                     + (f"; {st['truncated']} not scanned/kept because of size limits" if st["truncated"] else ""))
             except Exception as e:
                 log(f"Apex scan failed: {e}")
                 for r in records:
                     r.extra["apex_scanned"] = False
         usage.map_usages(records, comp_blobs, pems)
         if with_endpoints:
-            records += discovery.scan_discovered(comp_blobs)
+            records += discovery.scan_discovered(comp_blobs, note=note)
     for r in records:
         r.relevance, r.relevance_reason = relevance.classify(r)
     return records
@@ -79,6 +80,9 @@ def summarize(records: list[CertRecord]) -> dict:
     }
 
 
+_SCAN_SLOTS = threading.BoundedSemaphore(limits.MAX_CONCURRENT_SCANS)  # process-wide
+
+
 class Inventory:
     """Thread-safe cached snapshot of the org; `refresh()` re-scans using a fresh session each time."""
 
@@ -93,12 +97,26 @@ class Inventory:
         self.warnings: list[str] = []
         self.notes: list[str] = []
         self.scanning = False
+        self._last_start = 0.0
+
+    def scanning_now(self) -> bool:
+        with self._lock:
+            return self.scanning
+
+    def cooldown_remaining(self) -> int:
+        """Seconds until this session may start another scan."""
+        with self._lock:
+            return max(0, int(limits.SCAN_COOLDOWN_S - (time.time() - self._last_start) + 0.999))
 
     def refresh(self, scope: Optional[str] = None) -> None:
         with self._lock:
             if self.scanning:
                 return
+            if not _SCAN_SLOTS.acquire(blocking=False):
+                self.error = "The service is busy scanning other organisations - please try again in a minute"
+                return
             self.scanning = True
+            self._last_start = time.time()
             if scope:
                 self.scope = scope
             run_scope = self.scope
@@ -114,6 +132,7 @@ class Inventory:
             with self._lock:
                 self.error = f"{type(e).__name__}: {e}"
         finally:
+            _SCAN_SLOTS.release()
             with self._lock:
                 self.scanning = False
 

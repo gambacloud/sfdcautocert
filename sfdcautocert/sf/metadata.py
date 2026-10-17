@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from xml.sax.saxutils import escape
 
+from .. import limits
 from .auth import Session
 
 NS = "{http://soap.sforce.com/2006/04/metadata}"
@@ -37,7 +38,9 @@ class MetadataClient:
         for attempt in range(3):  # transient 5xx / empty responses are retried
             try:
                 with urllib.request.urlopen(req, timeout=120) as r:
-                    raw = r.read()
+                    raw = r.read(limits.MAX_SOAP_RESPONSE + 1)
+                if len(raw) > limits.MAX_SOAP_RESPONSE:
+                    raise MetadataError(f"response larger than {limits.MAX_SOAP_RESPONSE // (1024 * 1024)} MB; skipped")
                 if raw.strip():
                     return ET.fromstring(raw)
                 last = "empty response"
@@ -107,6 +110,8 @@ class MetadataClient:
             return {}
         out = {}
         with zipfile.ZipFile(io.BytesIO(base64.b64decode(z))) as zf:
+            if sum(i.file_size for i in zf.infolist()) > limits.MAX_UNZIPPED:
+                raise MetadataError(f"{type_name}: more than {limits.MAX_UNZIPPED // (1024 * 1024)} MB of metadata; skipped")
             for n in zf.namelist():
                 if n.endswith("/") or n == "package.xml":
                     continue

@@ -197,6 +197,7 @@ function render() {
   if (!state.scopeTouched) $("scope").value = d.scope || "standard";
 
   const notes = [];
+  if (state.flash) notes.push(h("div", {class: "note"}, state.flash));
   if (d.scope === "standard" && d.scanned_at) notes.push(h("div", {class: "note"},
     "Standard scan: Apex code was not read, so a certificate that looks unused may still be referenced from Apex. ",
     "Choose \u201c+ Apex\u201d and rescan to check."));
@@ -262,8 +263,10 @@ $("env").addEventListener("change", e => $("customWrap").classList.toggle("hidde
 $("loginBtn").addEventListener("click", startLogin);
 $("scope").addEventListener("change", () => { state.scopeTouched = true; });
 $("refresh").addEventListener("click", async () => {
-  await fetch(BASE + "/api/refresh", {method: "POST", headers: HDR, body: JSON.stringify({scope: $("scope").value})});
-  state.scopeTouched = false;
+  const r = await fetch(BASE + "/api/refresh", {method: "POST", headers: HDR, body: JSON.stringify({scope: $("scope").value})});
+  state.flash = r.ok ? null : ((await r.json().catch(() => ({}))).detail || ("Rescan failed (" + r.status + ")"));
+  if (r.ok) state.scopeTouched = false;
+  if (state.data) render();
   setTimeout(load, 300);
 });
 $("logout").addEventListener("click", async () => { await fetch(BASE + "/api/logout", {method: "POST", headers: HDR}); location.reload(); });
